@@ -1,4 +1,4 @@
-// server.js - ВСТАВЬТЕ ВЕСЬ ЭТОТ КОД
+// server.js - ПОЛНЫЙ КОД ДЛЯ РАБОТЫ РЕГИСТРАЦИИ
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
@@ -8,7 +8,7 @@ const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'stark-secret-2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'stark-secret-key-2024';
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -16,24 +16,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Проверка подключения
-pool.connect((err) => {
-  if (err) {
-    console.error('❌ Ошибка подключения к БД:', err.message);
-  } else {
-    console.log('✅ База данных подключена');
-    initDatabase();
-  }
-});
-
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5500',
+  origin: process.env.FRONTEND_URL || '*',
   credentials: true
 }));
 app.use(express.json());
 
-// Создание таблиц
+// Создание таблиц при запуске
 async function initDatabase() {
   try {
     await pool.query(`
@@ -45,28 +35,26 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS game_saves (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        progress TEXT DEFAULT '{}',
-        stats TEXT DEFAULT '{}',
-        last_saved TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    
-    console.log('✅ Таблицы созданы');
+    console.log('✅ Таблица users создана');
   } catch (error) {
     console.error('❌ Ошибка создания таблиц:', error);
   }
 }
 
-// Маршруты API
+initDatabase();
+
+// ====== API МАРШРУТЫ ======
+
+// 1. Статус сервера
 app.get('/api/status', (req, res) => {
-  res.json({ status: 'online', version: '1.0.0' });
+  res.json({ 
+    status: 'online', 
+    message: 'Stark Industries API',
+    timestamp: new Date().toISOString()
+  });
 });
 
+// 2. Тест базы данных
 app.get('/api/test-db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW() as time');
@@ -76,9 +64,35 @@ app.get('/api/test-db', async (req, res) => {
   }
 });
 
+// 3. Проверка имени пользователя
+app.get('/api/check-username/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const result = await pool.query(
+      'SELECT id FROM users WHERE username = $1',
+      [username]
+    );
+    res.json({ available: result.rows.length === 0 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. РЕГИСТРАЦИЯ (самое важное!)
 app.post('/api/register', async (req, res) => {
+  console.log('📝 Запрос на регистрацию:', req.body);
+  
   try {
     const { username, email, password } = req.body;
+    
+    // Валидация
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Все поля обязательны' });
+    }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Пароль должен быть не менее 6 символов' });
+    }
     
     // Проверка существующего пользователя
     const userCheck = await pool.query(
@@ -88,7 +102,7 @@ app.post('/api/register', async (req, res) => {
     
     if (userCheck.rows.length > 0) {
       return res.status(400).json({ 
-        error: 'Пользователь уже существует' 
+        error: 'Пользователь с таким именем или email уже существует' 
       });
     }
     
@@ -99,35 +113,42 @@ app.post('/api/register', async (req, res) => {
     // Создание пользователя
     const newUser = await pool.query(
       `INSERT INTO users (username, email, password_hash) 
-       VALUES ($1, $2, $3) RETURNING id, username, email`,
+       VALUES ($1, $2, $3) RETURNING id, username, email, created_at`,
       [username, email, passwordHash]
     );
     
-    // Создание токена
+    // Создание JWT токена
     const token = jwt.sign(
-      { userId: newUser.rows[0].id, username: newUser.rows[0].username },
+      { 
+        userId: newUser.rows[0].id, 
+        username: newUser.rows[0].username 
+      },
       JWT_SECRET,
       { expiresIn: '30d' }
     );
     
-    // Создание сохранения игры
-    await pool.query(
-      'INSERT INTO game_saves (user_id) VALUES ($1)',
-      [newUser.rows[0].id]
-    );
+    console.log('✅ Пользователь зарегистрирован:', username);
     
     res.status(201).json({
-      message: 'Регистрация успешна',
+      message: 'Регистрация успешна!',
       token,
-      user: newUser.rows[0]
+      user: {
+        id: newUser.rows[0].id,
+        username: newUser.rows[0].username,
+        email: newUser.rows[0].email
+      }
     });
     
   } catch (error) {
-    console.error('Ошибка регистрации:', error);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    console.error('❌ Ошибка регистрации:', error);
+    res.status(500).json({ 
+      error: 'Ошибка сервера при регистрации',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
+// 5. Вход в систему
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -139,13 +160,13 @@ app.post('/api/login', async (req, res) => {
     );
     
     if (user.rows.length === 0) {
-      return res.status(401).json({ error: 'Неверные данные' });
+      return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
     }
     
     // Проверка пароля
     const validPassword = await bcrypt.compare(password, user.rows[0].password_hash);
     if (!validPassword) {
-      return res.status(401).json({ error: 'Неверные данные' });
+      return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
     }
     
     // Создание токена
@@ -156,7 +177,7 @@ app.post('/api/login', async (req, res) => {
     );
     
     res.json({
-      message: 'Вход выполнен',
+      message: 'Вход выполнен успешно',
       token,
       user: {
         id: user.rows[0].id,
@@ -171,8 +192,37 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// 6. Проверка токена
+app.get('/api/verify-token', (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) {
+    return res.json({ valid: false, error: 'Токен не предоставлен' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    res.json({ valid: true, user: decoded });
+  } catch (error) {
+    res.json({ valid: false, error: 'Недействительный токен' });
+  }
+});
+
+// 7. Все пользователи (для теста)
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, username, email, created_at FROM users');
+    res.json({ users: result.rows });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Запуск сервера
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  console.log(`📡 API: http://localhost:${PORT}/api`);
+  console.log(`📡 API доступно: http://localhost:${PORT}/api`);
+  console.log(`🔗 FRONTEND_URL: ${process.env.FRONTEND_URL || 'не настроен'}`);
+  console.log(`🗄️ DATABASE_URL: ${process.env.DATABASE_URL ? 'настроена' : 'не настроена'}`);
 });
