@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5432;
 const JWT_SECRET = process.env.JWT_SECRET || 'stark-secret-key-2024';
 
 // Подключение к PostgreSQL
@@ -226,3 +226,4 @@ app.listen(PORT, () => {
   console.log(`🔗 FRONTEND_URL: ${process.env.FRONTEND_URL || 'не настроен'}`);
   console.log(`🗄️ DATABASE_URL: ${process.env.DATABASE_URL ? 'настроена' : 'не настроена'}`);
 });
+
